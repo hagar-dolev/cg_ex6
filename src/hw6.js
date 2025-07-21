@@ -62,11 +62,13 @@ let gameMessage = "";
 let messageTimer = 0;
 let hasScoredThisShot = false; // Track if current shot has already scored
 let scoreboardDisplay; // Reference to the 3D scoreboard display
+let ballPassedThroughNet = false; // Track if ball has passed through the net
+let netPassageTime = 0; // Track time since passing through net
 
-// Physics constants
-const GRAVITY = -9.8;
-const BOUNCE_DAMPING = 0.7;
-const FRICTION = 0.98;
+// Physics constants - Adjusted for proper hoop height
+const GRAVITY = -12.0; // Reduced gravity to allow higher shots
+const BOUNCE_DAMPING = 0.6; // Reduced for more bounces
+const FRICTION = 0.99; // Reduced air resistance
 const BALL_RADIUS = 0.25;
 const COURT_BOUNDS = { x: 14, z: 7 };
 const HOOP_POSITIONS = [
@@ -87,11 +89,16 @@ const SHOT_MESSAGE_TIME = 60; // 1 second at 60fps
 const RESET_MESSAGE_TIME = 60; // 1 second at 60fps
 
 // Physics threshold constants
-const BALL_STOP_VELOCITY_Y = 0.5;
-const BALL_STOP_VELOCITY_TOTAL = 1.0;
+const BALL_STOP_VELOCITY_Y = 0.3; // Reduced for more sensitive stopping
+const BALL_STOP_VELOCITY_TOTAL = 0.8; // Reduced for more sensitive stopping
 const ROTATION_SPEED_THRESHOLD = 0.1;
-const SHOT_BASE_VELOCITY = 25;
-const SHOT_UPWARD_COMPONENT = 5;
+const SHOT_BASE_VELOCITY = 35; // Increased significantly for proper height
+const SHOT_UPWARD_COMPONENT = 8; // Increased for better arc
+
+// Net physics constants
+const NET_HEIGHT = 1.5; // Height of the net below the rim
+const NET_SLOWDOWN_FACTOR = 0.3; // How much the net slows the ball
+const NET_PASSAGE_TIME = 0.5; // Time in seconds for ball to pass through net
 
 // Input state
 const keys = {
@@ -555,37 +562,62 @@ function updatePhysics(deltaTime) {
   // Apply gravity
   basketballVelocity.y += GRAVITY * deltaTime;
 
-  // Apply friction to horizontal movement
+  // Apply air resistance (friction) to all components
   basketballVelocity.x *= FRICTION;
+  basketballVelocity.y *= FRICTION;
   basketballVelocity.z *= FRICTION;
+
+  // Apply net physics if ball has scored and is passing through net
+  if (ballPassedThroughNet) {
+    netPassageTime += deltaTime;
+    
+    // Check if ball is in the net area (below rim, above net bottom)
+    for (const hoop of HOOP_POSITIONS) {
+      const horizontalDistance = Math.sqrt(
+        Math.pow(basketball.position.x - hoop.x, 2) +
+          Math.pow(basketball.position.z - hoop.z, 2)
+      );
+      
+      // If ball is within net area and still passing through
+      if (horizontalDistance < HOOP_RIM_RADIUS && 
+          basketball.position.y < hoop.y && 
+          basketball.position.y > hoop.y - NET_HEIGHT &&
+          netPassageTime < NET_PASSAGE_TIME) {
+        
+        // Apply net resistance - slow down the ball significantly
+        basketballVelocity.multiplyScalar(NET_SLOWDOWN_FACTOR);
+        
+        // Add some horizontal resistance from the net
+        basketballVelocity.x *= 0.8;
+        basketballVelocity.z *= 0.8;
+        
+        console.log("Ball passing through net - slowed down");
+        break;
+      }
+    }
+    
+    // Reset net passage after the ball has passed through
+    if (netPassageTime >= NET_PASSAGE_TIME) {
+      ballPassedThroughNet = false;
+      netPassageTime = 0;
+    }
+  }
 
   // Update position
   const positionChange = basketballVelocity.clone().multiplyScalar(deltaTime);
   basketball.position.add(positionChange);
 
-  // Debug: Log physics updates (only occasionally to avoid spam)
-  if (Math.random() < 0.01) {
-    // 1% chance to log
-    console.log("Physics update:", {
-      deltaTime: deltaTime,
-      velocity: basketballVelocity.clone(),
-      position: basketball.position.clone(),
-      positionChange: positionChange,
-    });
-  }
-
-  // Update rotation based on velocity - improved for better visibility
+  // Update rotation based on velocity - improved for realistic ball spin
   const velocityMagnitude = basketballVelocity.length();
-  const rotationSpeed = velocityMagnitude * 3; // Increased multiplier for more visible rotation
+  const rotationSpeed = velocityMagnitude * 2.5; // Adjusted for better visual effect
 
-  if (rotationSpeed > 0.1) {
-    // Lower threshold for more responsive rotation
+  if (rotationSpeed > 0.05) { // Lower threshold for more responsive rotation
     // Calculate rotation axis perpendicular to velocity direction
     const velocityNormalized = basketballVelocity.clone().normalize();
 
     // Create rotation axis perpendicular to velocity (for realistic ball spin)
     let rotationAxis;
-    if (Math.abs(velocityNormalized.y) < 0.9) {
+    if (Math.abs(velocityNormalized.y) < 0.8) {
       // For mostly horizontal movement, rotate around vertical axis
       rotationAxis = new THREE.Vector3(
         -velocityNormalized.z,
@@ -599,23 +631,18 @@ function updatePhysics(deltaTime) {
 
     // Apply rotation
     basketball.rotateOnAxis(rotationAxis, rotationSpeed * deltaTime);
-
-    // Debug rotation occasionally
-    if (Math.random() < 0.005) {
-      // 0.5% chance to log
-      console.log("Ball rotation:", {
-        velocity: basketballVelocity.clone(),
-        rotationSpeed: rotationSpeed,
-        rotationAxis: rotationAxis,
-        ballRotation: basketball.rotation.clone(),
-      });
-    }
   }
 
-  // Ground collision
+  // Ground collision with improved bounce physics
   if (basketball.position.y <= BALL_REST_HEIGHT) {
     basketball.position.y = BALL_REST_HEIGHT;
+    
+    // Bounce with energy loss
     basketballVelocity.y = -basketballVelocity.y * BOUNCE_DAMPING;
+    
+    // Add some horizontal friction on ground contact
+    basketballVelocity.x *= 0.95;
+    basketballVelocity.z *= 0.95;
 
     // Stop ball if velocity is very low
     if (
@@ -625,11 +652,10 @@ function updatePhysics(deltaTime) {
       isBallInFlight = false;
       basketballVelocity.set(0, 0, 0);
       basketballAngularVelocity.set(0, 0, 0);
+      ballPassedThroughNet = false; // Reset net state when ball stops
+      netPassageTime = 0;
     }
   }
-
-  // Court boundary collision - completely removed to allow ball to go anywhere
-  // Ball can now travel freely outside court boundaries for realistic shooting
 
   // Check for successful shots
   checkForScore();
@@ -668,12 +694,13 @@ function checkForScore() {
         score += 2;
         shotsMade++;
         hasScoredThisShot = true; // Mark this shot as scored
+        ballPassedThroughNet = true; // Ball will now pass through net
+        netPassageTime = 0; // Reset net passage timer
         gameMessage = "SHOT MADE! +2 points";
         messageTimer = MESSAGE_DISPLAY_TIME;
         updateScoreDisplay();
 
-        // Don't stop the ball immediately - let it continue falling
-        // The ball will naturally stop when it hits the ground
+        // Don't stop the ball immediately - let it continue falling through net
         return;
       } else if (horizontalDistance < HOOP_RIM_RADIUS) {
         // Ball hit the rim or net but didn't go through
@@ -726,89 +753,66 @@ function shootBall() {
     }
   }
 
+  // Calculate direction to hoop
+  const directionToHoop = new THREE.Vector3(
+    nearestHoop.x - ballPos.x,
+    0, // We'll handle vertical separately
+    nearestHoop.z - ballPos.z
+  ).normalize();
+
   // Calculate horizontal distance to hoop
   const horizontalDistance = Math.sqrt(
     Math.pow(nearestHoop.x - ballPos.x, 2) +
       Math.pow(nearestHoop.z - ballPos.z, 2)
   );
 
-  // Calculate vertical distance to hoop
-  const verticalDistance = nearestHoop.y - ballPos.y;
-
   // Calculate shot power (0-100% to velocity)
   const powerMultiplier = shotPower / 100;
   const baseVelocity = SHOT_BASE_VELOCITY * powerMultiplier;
 
-  // Calculate proper projectile motion to hit the basket
-  // We need to solve for the velocity that will reach the target
+  // Improved physics: Use angle-based shooting with height consideration
+  // Calculate minimum angle needed to reach hoop height
+  const minHeightForHoop = nearestHoop.y + 0.5; // Aim above the rim
+  const currentHeight = ballPos.y;
+  const heightDifference = minHeightForHoop - currentHeight;
+  
+  // Calculate minimum vertical velocity needed to reach hoop height
+  // Using physics equation: v^2 = v0^2 + 2*a*y
+  // At peak height, v = 0, so: 0 = v0^2 + 2*(-gravity)*height
+  // Therefore: v0 = sqrt(2*gravity*height)
+  const minVerticalVelocity = Math.sqrt(2 * Math.abs(GRAVITY) * heightDifference);
+  
+  // Use a higher angle for better arc and control
+  const shotAngle = Math.PI / 3; // 60 degrees for higher arc
+  
+  // Calculate velocity components
+  const horizontalVelocity = baseVelocity * Math.cos(shotAngle);
+  const verticalVelocity = Math.max(baseVelocity * Math.sin(shotAngle), minVerticalVelocity);
 
-  // Target position (slightly above the rim for better scoring)
-  const targetY = nearestHoop.y + 0.2; // Aim slightly above the rim
-  const targetX = nearestHoop.x;
-  const targetZ = nearestHoop.z;
+  // Apply horizontal velocity in direction of hoop
+  const horizontalVelocityX = directionToHoop.x * horizontalVelocity;
+  const horizontalVelocityZ = directionToHoop.z * horizontalVelocity;
 
-  // Calculate required velocity to reach the target with safety limits
-  // Using projectile motion equations: y = y0 + v0y*t - 0.5*g*t^2
-  // and x = x0 + v0x*t, z = z0 + v0z*t
-
-  // Time to reach target horizontally (with minimum time limit)
-  const minTimeToTarget = 0.5; // Minimum 0.5 seconds
-  const timeToTarget = Math.max(
-    minTimeToTarget,
-    horizontalDistance / (baseVelocity * 0.8)
-  );
-
-  // Required vertical velocity to reach target height (with limits)
-  const requiredVerticalVelocity = Math.max(
-    5,
-    Math.min(
-      30,
-      (targetY -
-        ballPos.y +
-        0.5 * Math.abs(GRAVITY) * timeToTarget * timeToTarget) /
-        timeToTarget
-    )
-  );
-
-  // Horizontal velocity components (with limits)
-  const maxHorizontalVelocity = baseVelocity * 0.9;
-  const horizontalVelocityX = Math.max(
-    -maxHorizontalVelocity,
-    Math.min(maxHorizontalVelocity, (targetX - ballPos.x) / timeToTarget)
-  );
-  const horizontalVelocityZ = Math.max(
-    -maxHorizontalVelocity,
-    Math.min(maxHorizontalVelocity, (targetZ - ballPos.z) / timeToTarget)
-  );
-
-  // Set initial velocity to hit the target
+  // Set initial velocity
   basketballVelocity.set(
-    horizontalVelocityX, // X component toward target
-    requiredVerticalVelocity, // Y component to reach target height
-    horizontalVelocityZ // Z component toward target
+    horizontalVelocityX,
+    verticalVelocity,
+    horizontalVelocityZ
   );
-
-  // Final safety check - limit total velocity to prevent infinity
-  const totalVelocity = basketballVelocity.length();
-  const maxTotalVelocity = baseVelocity * 1.5;
-  if (totalVelocity > maxTotalVelocity) {
-    basketballVelocity.normalize().multiplyScalar(maxTotalVelocity);
-  }
 
   // Debug: Log the shot parameters
   console.log("Shot fired!", {
     ballPosition: ballPos,
     targetHoop: nearestHoop,
-    targetPosition: { x: targetX, y: targetY, z: targetZ },
     horizontalDistance: horizontalDistance,
-    verticalDistance: verticalDistance,
+    heightDifference: heightDifference,
     power: shotPower,
     baseVelocity: baseVelocity,
-    timeToTarget: timeToTarget,
-    requiredVerticalVelocity: requiredVerticalVelocity,
-    horizontalVelocityX: horizontalVelocityX,
-    horizontalVelocityZ: horizontalVelocityZ,
-    finalVelocity: basketballVelocity,
+    shotAngle: shotAngle * (180 / Math.PI), // Convert to degrees for debug
+    minVerticalVelocity: minVerticalVelocity,
+    horizontalVelocity: horizontalVelocity,
+    verticalVelocity: verticalVelocity,
+    finalVelocity: basketballVelocity.clone(),
   });
 
   gameMessage = "SHOT TAKEN!";
@@ -824,6 +828,8 @@ function resetBall() {
     basketball.rotation.set(0, 0, 0);
     isBallInFlight = false;
     hasScoredThisShot = false; // Reset score flag
+    ballPassedThroughNet = false; // Reset net state
+    netPassageTime = 0;
     shotPower = 50;
     gameMessage = "Ball reset to center";
     messageTimer = RESET_MESSAGE_TIME;
