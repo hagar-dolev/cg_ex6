@@ -1,0 +1,32 @@
+{
+  "name": "hw6-basketball-shooting-game",
+  "version": "1.0.0",
+  "description": "HW6 - Interactive Basketball Shooting Game with Physics",
+  "main": "index.html",
+  "scripts": {
+    "start": "live-server --port=8000 --open=/",
+    "dev": "live-server --port=8000 --open=/ --watch=src,index.html",
+    "serve": "http-server -p 8000 -o",
+    "build": "echo 'No build step needed for static files'",
+    "test": "echo 'No tests specified'"
+  },
+  "keywords": [
+    "threejs",
+    "basketball",
+    "physics",
+    "game",
+    "computer-graphics"
+  ],
+  "author": "Your Name",
+  "license": "MIT",
+  "devDependencies": {
+    "live-server": "^1.2.2",
+    "http-server": "^14.1.1"
+  },
+  "dependencies": {},
+  "browserslist": [
+    "> 1%",
+    "last 2 versions",
+    "not dead"
+  ]
+}
