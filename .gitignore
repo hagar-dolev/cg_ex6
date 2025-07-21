@@ -138,4 +138,16 @@ dist/
 out/
 
 # Local development
-.local/ 
+.local/
+
+# Video recordings and large media files (handled by Git LFS)
+# *.mov
+# *.mp4
+# *.avi
+# *.mkv
+# *.wmv
+# *.flv
+# *.webm
+# *.m4v
+# *.3gp
+# *.ogv 
