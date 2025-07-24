@@ -77,7 +77,7 @@ const GRAVITY = -12.0; // Reduced gravity to allow higher shots
 const BOUNCE_DAMPING = 0.6; // Reduced for more bounces
 const FRICTION = 0.99; // Reduced air resistance
 const BALL_RADIUS = 0.25;
-const COURT_BOUNDS = { x: 14, z: 7 };
+const COURT_BOUNDS = { x: 18, z: 9 };
 const HOOP_POSITIONS = [
   { x: -15, z: 0, y: 10 },
   { x: 15, z: 0, y: 10 },
@@ -162,7 +162,7 @@ function createBasketballCourt() {
   courtTexture.wrapT = THREE.RepeatWrapping;
   courtTexture.repeat.set(4, 4);
 
-  const courtGeometry = new THREE.BoxGeometry(30, COURT_HEIGHT, 15);
+  const courtGeometry = new THREE.BoxGeometry(36, COURT_HEIGHT, 18);
   const courtMaterial = new THREE.MeshStandardMaterial({
     map: courtTexture,
     normalMap: normalMap,
@@ -176,8 +176,8 @@ function createBasketballCourt() {
 
   // Center line
   const centerLineGeometry = new THREE.BufferGeometry().setFromPoints([
-    new THREE.Vector3(0, 0.11, -7.5),
-    new THREE.Vector3(0, 0.11, 7.5),
+    new THREE.Vector3(0, 0.11, -9),
+    new THREE.Vector3(0, 0.11, 9),
   ]);
   const centerLine = new THREE.Line(centerLineGeometry, lineMaterial);
   scene.add(centerLine);
@@ -225,14 +225,14 @@ function createBasketballCourt() {
   // Left three-point extensions
   const leftTopExtension = new THREE.BufferGeometry().setFromPoints([
     new THREE.Vector3(-12, 0.11, threePointRadius),
-    new THREE.Vector3(-15, 0.11, threePointRadius),
+    new THREE.Vector3(-18, 0.11, threePointRadius),
   ]);
   const leftTopLine = new THREE.Line(leftTopExtension, lineMaterial);
   scene.add(leftTopLine);
 
   const leftBottomExtension = new THREE.BufferGeometry().setFromPoints([
     new THREE.Vector3(-12, 0.11, -threePointRadius),
-    new THREE.Vector3(-15, 0.11, -threePointRadius),
+    new THREE.Vector3(-18, 0.11, -threePointRadius),
   ]);
   const leftBottomLine = new THREE.Line(leftBottomExtension, lineMaterial);
   scene.add(leftBottomLine);
@@ -258,14 +258,14 @@ function createBasketballCourt() {
   // Right three-point extensions
   const rightTopExtension = new THREE.BufferGeometry().setFromPoints([
     new THREE.Vector3(12, 0.11, threePointRadius),
-    new THREE.Vector3(15, 0.11, threePointRadius),
+    new THREE.Vector3(18, 0.11, threePointRadius),
   ]);
   const rightTopLine = new THREE.Line(rightTopExtension, lineMaterial);
   scene.add(rightTopLine);
 
   const rightBottomExtension = new THREE.BufferGeometry().setFromPoints([
     new THREE.Vector3(12, 0.11, -threePointRadius),
-    new THREE.Vector3(15, 0.11, -threePointRadius),
+    new THREE.Vector3(18, 0.11, -threePointRadius),
   ]);
   const rightBottomLine = new THREE.Line(rightBottomExtension, lineMaterial);
   scene.add(rightBottomLine);
@@ -282,8 +282,8 @@ function createBasketballCourt() {
   // Left key area
   const leftKeyGeometry = new THREE.BufferGeometry().setFromPoints([
     new THREE.Vector3(-12, 0.11, -1.8),
-    new THREE.Vector3(-15, 0.11, -1.8),
-    new THREE.Vector3(-15, 0.11, 1.8),
+    new THREE.Vector3(-18, 0.11, -1.8),
+    new THREE.Vector3(-18, 0.11, 1.8),
     new THREE.Vector3(-12, 0.11, 1.8),
   ]);
   const leftKey = new THREE.Line(leftKeyGeometry, lineMaterial);
@@ -300,8 +300,8 @@ function createBasketballCourt() {
   // Right key area
   const rightKeyGeometry = new THREE.BufferGeometry().setFromPoints([
     new THREE.Vector3(12, 0.11, -1.8),
-    new THREE.Vector3(15, 0.11, -1.8),
-    new THREE.Vector3(15, 0.11, 1.8),
+    new THREE.Vector3(18, 0.11, -1.8),
+    new THREE.Vector3(18, 0.11, 1.8),
     new THREE.Vector3(12, 0.11, 1.8),
   ]);
   const rightKey = new THREE.Line(rightKeyGeometry, lineMaterial);
@@ -732,6 +732,56 @@ function updatePhysics(deltaTime) {
     }
   }
 
+  // SCENARIO 2: Air rotation during shooting and bouncing
+  // Only apply when ball is in the air (above ground)
+  if (basketball.position.y > BALL_REST_HEIGHT + 0.05) {
+    const velocityMagnitude = basketballVelocity.length();
+
+    // Only apply air rotation if ball has significant velocity
+    if (velocityMagnitude > 0.5) {
+      // Calculate horizontal velocity for air rotation
+      const horizontalVelocity = Math.sqrt(
+        basketballVelocity.x * basketballVelocity.x +
+          basketballVelocity.z * basketballVelocity.z
+      );
+
+      const verticalVelocity = Math.abs(basketballVelocity.y);
+
+      // Air rotation is based on horizontal movement (like a real basketball)
+      if (horizontalVelocity > 0.2) {
+        // Determine rotation axis based on movement direction
+        let rotationAxis;
+
+        if (Math.abs(basketballVelocity.x) > Math.abs(basketballVelocity.z)) {
+          // Moving mostly left/right - rotate around Z-axis
+          rotationAxis = new THREE.Vector3(
+            0,
+            0,
+            basketballVelocity.x > 0 ? -1 : 1
+          );
+        } else {
+          // Moving mostly forward/backward - rotate around X-axis
+          rotationAxis = new THREE.Vector3(
+            basketballVelocity.z > 0 ? 1 : -1,
+            0,
+            0
+          );
+        }
+        // rotationAxis.y = basketballVelocity.y > 0 ? -1 : 1;
+
+        // Air rotation speed - increased for more visible shooting rotation
+        const airRotationSpeed =
+          horizontalVelocity * 1.8 + verticalVelocity * 0.1; // 120% of ground rolling speed for more visible effect
+
+        // Apply air rotation
+        basketball.rotateOnWorldAxis(
+          rotationAxis,
+          airRotationSpeed * deltaTime
+        );
+      }
+    }
+  }
+
   // Ground collision with improved bounce physics
   if (basketball.position.y <= BALL_REST_HEIGHT) {
     basketball.position.y = BALL_REST_HEIGHT;
@@ -742,6 +792,38 @@ function updatePhysics(deltaTime) {
     // Add some horizontal friction on ground contact
     basketballVelocity.x *= 0.95;
     basketballVelocity.z *= 0.95;
+
+    // Bounce rotation effect - ball maintains some rotation but with energy loss
+    // This simulates how a real basketball bounces and continues rotating
+    if (basketballVelocity.length() > 1.0) {
+      // Calculate bounce rotation based on impact velocity
+      const impactSpeed = Math.abs(basketballVelocity.y);
+      const bounceRotationSpeed = impactSpeed * 0.3; // 30% of impact speed
+
+      // Determine rotation axis based on horizontal movement
+      let bounceRotationAxis;
+      if (Math.abs(basketballVelocity.x) > Math.abs(basketballVelocity.z)) {
+        // Bouncing with left/right movement - rotate around Z-axis
+        bounceRotationAxis = new THREE.Vector3(
+          0,
+          0,
+          basketballVelocity.x > 0 ? 1 : -1
+        );
+      } else {
+        // Bouncing with forward/backward movement - rotate around X-axis
+        bounceRotationAxis = new THREE.Vector3(
+          basketballVelocity.z > 0 ? 1 : -1,
+          0,
+          0
+        );
+      }
+
+      // Apply bounce rotation with energy loss
+      basketball.rotateOnWorldAxis(
+        bounceRotationAxis,
+        bounceRotationSpeed * deltaTime
+      );
+    }
 
     // Stop ball if velocity is very low
     if (
