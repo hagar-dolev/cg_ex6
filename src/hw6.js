@@ -69,6 +69,8 @@ let outOfBoundsTimer = 0; // Timer for out of bounds message
 let shotPassedHoop = false; // Track if ball has passed through hoop area
 let missedShotDetected = false; // Track if a missed shot has been detected
 let scoreboardPulseTimer = 0; // Timer for scoreboard pulse animation
+let hoopObjects = []; // Array to store hoop objects for collision detection
+let rimHitDetected = false; // Track if rim was hit to prevent multiple detections
 
 // Physics constants - Adjusted for proper hoop height
 const GRAVITY = -12.0; // Reduced gravity to allow higher shots
@@ -102,8 +104,9 @@ const SHOT_UPWARD_COMPONENT = 8; // Increased for better arc
 
 // Net physics constants
 const NET_HEIGHT = 1.5; // Height of the net below the rim
-const NET_SLOWDOWN_FACTOR = 0.3; // How much the net slows the ball
-const NET_PASSAGE_TIME = 0.5; // Time in seconds for ball to pass through net
+const NET_SLOWDOWN_FACTOR = 0.7; // How much the net slows the ball (reduced slowdown)
+const NET_PASSAGE_TIME = 0.6; // Time in seconds for ball to pass through net
+const NET_MIN_VELOCITY = 3.0; // Minimum velocity to prevent complete stopping
 
 // Out of bounds constants
 const OUT_OF_BOUNDS_MESSAGE_TIME = 90; // 1.5 seconds at 60fps
@@ -112,6 +115,17 @@ const COURT_BOUNDARY_BUFFER = 2; // Extra buffer beyond court bounds
 // Backboard collision constants
 const BACKBOARD_BOUNCE_DAMPING = 0.8; // How much the backboard slows the ball
 const BACKBOARD_FRICTION = 0.9; // Friction when ball hits backboard
+
+// Rim collision constants
+const RIM_BOUNCE_DAMPING = 0.6; // How much the rim slows the ball
+const RIM_FRICTION = 0.8; // Friction when ball hits rim
+const HOOP_MOVEMENT_AMOUNT = 0.1; // How much the hoop moves when hit
+const HOOP_MOVEMENT_DURATION = 30; // How long the hoop moves (frames)
+
+// Net movement constants
+const NET_MOVEMENT_AMOUNT = 0.15; // How much the net moves when hit
+const NET_MOVEMENT_DURATION = 60; // How long the net moves (frames) - longer than rim
+const NET_SWAY_FREQUENCY = 0.2; // How fast the net sways
 
 // Input state
 const keys = {
@@ -414,6 +428,7 @@ function createBasketballHoop(x, z, facingDirection) {
   // Enhanced chain net
   const chainMaterial = new THREE.LineBasicMaterial({ color: 0xcccccc });
   const netSegments = 16;
+  const netLines = []; // Array to store all net lines for movement
 
   // Vertical chain lines
   for (let i = 0; i < netSegments; i++) {
@@ -432,6 +447,7 @@ function createBasketballHoop(x, z, facingDirection) {
     ]);
     const chainLine = new THREE.Line(chainLineGeometry, chainMaterial);
     hoopGroup.add(chainLine);
+    netLines.push(chainLine); // Store for movement
   }
 
   // Horizontal chain rings
@@ -454,8 +470,25 @@ function createBasketballHoop(x, z, facingDirection) {
     const ringGeometry = new THREE.BufferGeometry().setFromPoints(ringPoints);
     const chainRing = new THREE.Line(ringGeometry, chainMaterial);
     hoopGroup.add(chainRing);
+    netLines.push(chainRing); // Store for movement
   }
 
+  // Store hoop objects for collision detection and movement
+  const hoopData = {
+    group: hoopGroup,
+    rim: rim,
+    backboard: backboard,
+    netLines: netLines, // Store net line objects for movement
+    position: { x: x, y: 10, z: z },
+    originalPosition: { x: x, y: 10, z: z },
+    rimOriginalPosition: { x: x, y: 10, z: z }, // Store rim's original position separately
+    movementTimer: 0,
+    isMoving: false,
+    netMovementTimer: 0,
+    isNetMoving: false,
+  };
+
+  hoopObjects.push(hoopData);
   scene.add(hoopGroup);
   return hoopGroup;
 }
@@ -622,20 +655,28 @@ function updatePhysics(deltaTime) {
       );
 
       // If ball is within net area and still passing through
+      // Use a smaller radius for net collision to be more precise
       if (
-        horizontalDistance < HOOP_RIM_RADIUS &&
+        horizontalDistance < HOOP_RIM_RADIUS * 0.8 &&
         basketball.position.y < hoop.y &&
         basketball.position.y > hoop.y - NET_HEIGHT &&
         netPassageTime < NET_PASSAGE_TIME
       ) {
-        // Apply net resistance - slow down the ball significantly
+        // Apply net resistance - slow down the ball significantly but don't stop it completely
         basketballVelocity.multiplyScalar(NET_SLOWDOWN_FACTOR);
 
-        // Add some horizontal resistance from the net
-        basketballVelocity.x *= 0.8;
-        basketballVelocity.z *= 0.8;
+        // Add some horizontal resistance from the net (reduced for more natural passage)
+        basketballVelocity.x *= 0.9;
+        basketballVelocity.z *= 0.9;
 
-        console.log("Ball passing through net - slowed down");
+        // Ensure ball maintains minimum velocity to prevent complete stopping
+        const currentVelocity = basketballVelocity.length();
+        if (currentVelocity < NET_MIN_VELOCITY) {
+          const scaleFactor = NET_MIN_VELOCITY / currentVelocity;
+          basketballVelocity.multiplyScalar(scaleFactor);
+        }
+
+        console.log("Ball passing through net - slowed down but continuing");
         break;
       }
     }
@@ -651,31 +692,44 @@ function updatePhysics(deltaTime) {
   const positionChange = basketballVelocity.clone().multiplyScalar(deltaTime);
   basketball.position.add(positionChange);
 
-  // Update rotation based on velocity - improved for realistic ball spin
-  const velocityMagnitude = basketballVelocity.length();
-  const rotationSpeed = velocityMagnitude * 2.5; // Adjusted for better visual effect
+  // SCENARIO 1: Perfect rolling on court floor
+  // Only apply when ball is on the ground and moving
+  if (basketball.position.y <= BALL_REST_HEIGHT + 0.05) {
+    const horizontalVelocity = Math.sqrt(
+      basketballVelocity.x * basketballVelocity.x +
+        basketballVelocity.z * basketballVelocity.z
+    );
 
-  if (rotationSpeed > 0.05) {
-    // Lower threshold for more responsive rotation
-    // Calculate rotation axis perpendicular to velocity direction
-    const velocityNormalized = basketballVelocity.clone().normalize();
+    // Only rotate if ball is actually moving horizontally
+    if (horizontalVelocity > 0.1) {
+      // Calculate the exact rotation needed for perfect rolling
+      // For a rolling ball: angular velocity = linear velocity / radius
+      const angularVelocity = horizontalVelocity / BALL_RADIUS;
 
-    // Create rotation axis perpendicular to velocity (for realistic ball spin)
-    let rotationAxis;
-    if (Math.abs(velocityNormalized.y) < 0.8) {
-      // For mostly horizontal movement, rotate around vertical axis
-      rotationAxis = new THREE.Vector3(
-        -velocityNormalized.z,
-        0,
-        velocityNormalized.x
-      ).normalize();
-    } else {
-      // For vertical movement, rotate around horizontal axis
-      rotationAxis = new THREE.Vector3(1, 0, 0);
+      // Determine rotation axis based on movement direction
+      let rotationAxis;
+
+      if (Math.abs(basketballVelocity.x) > Math.abs(basketballVelocity.z)) {
+        // Moving mostly left/right - rotate around Z-axis
+        rotationAxis = new THREE.Vector3(
+          0,
+          0,
+          basketballVelocity.x > 0 ? 1 : -1
+        );
+      } else {
+        // Moving mostly forward/backward - rotate around X-axis
+        rotationAxis = new THREE.Vector3(
+          basketballVelocity.z > 0 ? 1 : -1,
+          0,
+          0
+        );
+      }
+
+      // Apply the rotation - this will make the ball roll exactly one full turn
+      // for every circumference distance traveled
+      // Use world axis rotation to keep rotation axis fixed relative to world coordinates
+      basketball.rotateOnWorldAxis(rotationAxis, angularVelocity * deltaTime);
     }
-
-    // Apply rotation
-    basketball.rotateOnAxis(rotationAxis, rotationSpeed * deltaTime);
   }
 
   // Ground collision with improved bounce physics
@@ -715,6 +769,9 @@ function updatePhysics(deltaTime) {
 
   // Check for backboard collisions
   checkBackboardCollision();
+
+  // Check for rim collisions
+  checkRimCollision();
 
   // Check for successful shots
   checkForScore();
@@ -816,6 +873,52 @@ function checkBackboardCollision() {
   }
 }
 
+function checkRimCollision() {
+  if (!basketball || !isBallInFlight || rimHitDetected) return;
+
+  for (const hoopData of hoopObjects) {
+    const rim = hoopData.rim;
+    const rimPosition = hoopData.position;
+
+    // Check if ball is at rim height and near rim
+    if (Math.abs(basketball.position.y - rimPosition.y) < 0.3) {
+      const horizontalDistance = Math.sqrt(
+        Math.pow(basketball.position.x - rimPosition.x, 2) +
+          Math.pow(basketball.position.z - rimPosition.z, 2)
+      );
+
+      // Rim radius is 0.45, check if ball is hitting the rim
+      if (Math.abs(horizontalDistance - 0.45) < 0.2) {
+        console.log("Rim collision detected!");
+        rimHitDetected = true;
+
+        // Bounce the ball off the rim
+        basketballVelocity.y = -basketballVelocity.y * RIM_BOUNCE_DAMPING;
+        basketballVelocity.x *= RIM_FRICTION;
+        basketballVelocity.z *= RIM_FRICTION;
+
+        // Add some randomness to make it more realistic
+        basketballVelocity.x += (Math.random() - 0.5) * 3;
+        basketballVelocity.z += (Math.random() - 0.5) * 3;
+
+        // Move the rim slightly when hit
+        hoopData.isMoving = true;
+        hoopData.movementTimer = HOOP_MOVEMENT_DURATION;
+
+        // Move the net when rim is hit
+        hoopData.isNetMoving = true;
+        hoopData.netMovementTimer = NET_MOVEMENT_DURATION;
+
+        // Show rim hit message
+        gameMessage = "RIM!";
+        messageTimer = 30; // 0.5 seconds
+
+        break;
+      }
+    }
+  }
+}
+
 function checkForScore() {
   if (!basketball || !isBallInFlight || hasScoredThisShot) return;
 
@@ -852,6 +955,19 @@ function checkForScore() {
         ballPassedThroughNet = true; // Ball will now pass through net
         netPassageTime = 0; // Reset net passage timer
         shotPassedHoop = true; // Mark that ball passed through hoop area
+
+        // Move the net when ball scores
+        for (const hoopData of hoopObjects) {
+          if (
+            Math.abs(hoopData.position.x - hoop.x) < 1 &&
+            Math.abs(hoopData.position.z - hoop.z) < 1
+          ) {
+            hoopData.isNetMoving = true;
+            hoopData.netMovementTimer = NET_MOVEMENT_DURATION;
+            break;
+          }
+        }
+
         gameMessage = "SHOT MADE! +2 points";
         messageTimer = MESSAGE_DISPLAY_TIME;
         updateScoreDisplay();
@@ -913,6 +1029,7 @@ function shootBall() {
   outOfBoundsTimer = 0;
   shotPassedHoop = false; // Reset shot passed hoop state for new shot
   missedShotDetected = false; // Reset missed shot detection for new shot
+  rimHitDetected = false; // Reset rim hit detection for new shot
 
   // Find nearest hoop
   const ballPos = basketball.position;
@@ -931,50 +1048,91 @@ function shootBall() {
     }
   }
 
-  // Calculate direction to hoop
-  const directionToHoop = new THREE.Vector3(
-    nearestHoop.x - ballPos.x,
-    0, // We'll handle vertical separately
-    nearestHoop.z - ballPos.z
-  ).normalize();
-
   // Calculate horizontal distance to hoop
   const horizontalDistance = Math.sqrt(
     Math.pow(nearestHoop.x - ballPos.x, 2) +
       Math.pow(nearestHoop.z - ballPos.z, 2)
   );
 
+  // Calculate direction to hoop center
+  const directionToHoop = new THREE.Vector3(
+    nearestHoop.x - ballPos.x,
+    0, // We'll handle vertical separately
+    nearestHoop.z - ballPos.z
+  ).normalize();
+
+  // Improved aiming - aim directly at the center of the hoop
+  // Remove randomness for better accuracy, add slight offset only for realism
+  let aimOffset = 0.01; // Very small offset for realism
+
+  // Adjust aim based on distance - closer shots need more precision
+  if (horizontalDistance < 5) {
+    aimOffset = 0.005; // Very precise for close shots
+  } else if (horizontalDistance < 10) {
+    aimOffset = 0.01; // Medium precision for mid-range
+  } else {
+    aimOffset = 0.02; // Slightly more variance for long shots
+  }
+
+  // Add very slight randomness for realistic shooting
+  const adjustedDirectionX =
+    directionToHoop.x + (Math.random() - 0.5) * aimOffset;
+  const adjustedDirectionZ =
+    directionToHoop.z + (Math.random() - 0.5) * aimOffset;
+
+  // Normalize the adjusted direction
+  const adjustedDirection = new THREE.Vector3(
+    adjustedDirectionX,
+    0,
+    adjustedDirectionZ
+  ).normalize();
+
   // Calculate shot power (0-100% to velocity)
   const powerMultiplier = shotPower / 100;
   const baseVelocity = SHOT_BASE_VELOCITY * powerMultiplier;
 
-  // Improved physics: Use angle-based shooting with height consideration
-  // Calculate minimum angle needed to reach hoop height
+  // Distance-aware shooting algorithm
   const minHeightForHoop = nearestHoop.y + 0.5; // Aim above the rim
   const currentHeight = ballPos.y;
   const heightDifference = minHeightForHoop - currentHeight;
 
   // Calculate minimum vertical velocity needed to reach hoop height
-  // Using physics equation: v^2 = v0^2 + 2*a*y
-  // At peak height, v = 0, so: 0 = v0^2 + 2*(-gravity)*height
-  // Therefore: v0 = sqrt(2*gravity*height)
   const minVerticalVelocity = Math.sqrt(
     2 * Math.abs(GRAVITY) * heightDifference
   );
 
-  // Use a higher angle for better arc and control
-  const shotAngle = Math.PI / 3; // 60 degrees for higher arc
+  // Calculate optimal angle based on distance
+  // Closer shots need higher angles, farther shots need lower angles
+  let shotAngle;
 
-  // Calculate velocity components
-  const horizontalVelocity = baseVelocity * Math.cos(shotAngle);
-  const verticalVelocity = Math.max(
+  if (horizontalDistance < 3) {
+    // Very close shots (under 3 units) - higher angle
+    shotAngle = Math.PI * 0.5; // ~90 degrees (high arc)
+  } else if (horizontalDistance < 8) {
+    // Close shots (3-8 units) - medium-high angle
+    shotAngle = Math.PI * 0.45; // ~81 degrees (good arc)
+  } else if (horizontalDistance < 15) {
+    // Medium distance shots (8-15 units) - medium angle
+    shotAngle = Math.PI * 0.4; // ~72 degrees (balanced)
+  } else {
+    // Long distance shots (15+ units) - lower angle for range
+    shotAngle = Math.PI * 0.35; // ~63 degrees (optimal for range)
+  }
+
+  // Calculate velocity components with distance-based adjustments
+  let horizontalVelocity = baseVelocity * Math.cos(shotAngle);
+  let verticalVelocity = Math.max(
     baseVelocity * Math.sin(shotAngle),
     minVerticalVelocity
   );
 
-  // Apply horizontal velocity in direction of hoop
-  const horizontalVelocityX = directionToHoop.x * horizontalVelocity;
-  const horizontalVelocityZ = directionToHoop.z * horizontalVelocity;
+  // Adjust horizontal velocity based on distance to prevent overshooting
+  const maxHorizontalVelocity = horizontalDistance * 3; // Less restrictive scaling
+  horizontalVelocity = Math.min(horizontalVelocity, maxHorizontalVelocity);
+
+  // Apply horizontal velocity in adjusted direction of hoop
+  const horizontalVelocityX = adjustedDirection.x * horizontalVelocity;
+  const horizontalVelocityZ = adjustedDirection.z * horizontalVelocity;
 
   // Set initial velocity
   basketballVelocity.set(
@@ -995,6 +1153,7 @@ function shootBall() {
     minVerticalVelocity: minVerticalVelocity,
     horizontalVelocity: horizontalVelocity,
     verticalVelocity: verticalVelocity,
+    maxHorizontalVelocity: maxHorizontalVelocity,
     finalVelocity: basketballVelocity.clone(),
   });
 
@@ -1017,6 +1176,7 @@ function resetBall() {
     outOfBoundsTimer = 0;
     shotPassedHoop = false; // Reset shot passed hoop state
     missedShotDetected = false; // Reset missed shot detection
+
     shotPower = 50;
     gameMessage = "Ball reset to center";
     messageTimer = RESET_MESSAGE_TIME;
@@ -1062,15 +1222,28 @@ function moveBall(direction, speed) {
   basketball.position.x += direction.x * moveSpeed;
   basketball.position.z += direction.z * moveSpeed;
 
-  // Add rotation during movement for better visual feedback
+  // Enhanced rotation during movement for better visual feedback
   if (direction.length() > 0) {
-    const rotationSpeed = moveSpeed * 2; // Rotation speed based on movement speed
-    const rotationAxis = new THREE.Vector3(
-      -direction.z,
+    const rotationSpeed = moveSpeed * 3; // Increased rotation speed for better visibility
+
+    // Main rotation axis perpendicular to movement direction
+    // FIXED: Corrected rotation direction to match movement (final attempt)
+    const mainRotationAxis = new THREE.Vector3(
+      direction.z,
       0,
-      direction.x
+      -direction.x
     ).normalize();
-    basketball.rotateOnAxis(rotationAxis, rotationSpeed);
+    basketball.rotateOnWorldAxis(mainRotationAxis, rotationSpeed);
+
+    // Add subtle wobble for more dynamic movement
+    const wobbleAxis = new THREE.Vector3(
+      Math.sin(Date.now() * 0.02) * 0.2,
+      1,
+      Math.cos(Date.now() * 0.02) * 0.2
+    ).normalize();
+    if (direction.y != 0) {
+      basketball.rotateOnWorldAxis(wobbleAxis, rotationSpeed * 0.1);
+    }
   }
 
   // Allow ball to go outside court bounds for more realistic gameplay
@@ -1263,6 +1436,62 @@ function animate(currentTime) {
     const pulseIntensity = 0.2 + 0.1 * Math.sin(scoreboardPulseTimer * 0.3);
     if (scoreboardDisplay && scoreboardDisplay.material) {
       scoreboardDisplay.material.emissiveIntensity = pulseIntensity;
+    }
+  }
+
+  // Update hoop movement animation
+  for (const hoopData of hoopObjects) {
+    if (hoopData.isMoving && hoopData.movementTimer > 0) {
+      hoopData.movementTimer--;
+
+      // Calculate movement amount based on timer
+      const movementProgress =
+        1 - hoopData.movementTimer / HOOP_MOVEMENT_DURATION;
+      const movementAmount =
+        HOOP_MOVEMENT_AMOUNT * Math.sin(movementProgress * Math.PI);
+
+      // Move only the rim, not the entire hoop group
+      hoopData.rim.position.y = hoopData.rimOriginalPosition.y + movementAmount;
+
+      // Stop movement when timer reaches 0
+      if (hoopData.movementTimer <= 0) {
+        hoopData.isMoving = false;
+        hoopData.rim.position.y = hoopData.rimOriginalPosition.y;
+      }
+    }
+
+    // Update net movement animation
+    if (hoopData.isNetMoving && hoopData.netMovementTimer > 0) {
+      hoopData.netMovementTimer--;
+
+      // Calculate net movement with swaying effect
+      const netProgress = 1 - hoopData.netMovementTimer / NET_MOVEMENT_DURATION;
+      const swayAmount =
+        NET_MOVEMENT_AMOUNT *
+        Math.sin(netProgress * Math.PI * 2) *
+        Math.exp(-netProgress * 2);
+
+      // Apply movement to all net lines
+      for (const netLine of hoopData.netLines) {
+        // Move each net line slightly in a swaying motion
+        netLine.position.x =
+          Math.sin(netProgress * Math.PI * 4 + Math.random() * 0.5) *
+          swayAmount *
+          0.3;
+        netLine.position.z =
+          Math.cos(netProgress * Math.PI * 4 + Math.random() * 0.5) *
+          swayAmount *
+          0.3;
+      }
+
+      // Stop net movement when timer reaches 0
+      if (hoopData.netMovementTimer <= 0) {
+        hoopData.isNetMoving = false;
+        // Reset net lines to original position
+        for (const netLine of hoopData.netLines) {
+          netLine.position.set(0, 0, 0);
+        }
+      }
     }
   }
 
