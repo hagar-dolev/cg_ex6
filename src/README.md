@@ -1,59 +1,37 @@
-# Exercise 5 – Basketball Court Infrastructure with THREE.js
+# Exercise 6 – Interactive Basketball Shooting Game with Physics
 
-## Overview
-This exercise focuses on implementing the static infrastructure of a basketball court scene using THREE.js. You will create the court, hoops, and basketball, but WITHOUT physics, animation, or interactive controls. This is the foundation for the next exercise (HW06) which will add the interactive elements.
 
-## Tasks - HW05 INFRASTRUCTURE ONLY
-1. Add court lines to the basketball court:
-   - Center line
-   - Center circle  
-   - Three-point lines on both sides
-   - Court markings must be white and clearly visible
+## group members
+- Hagar Dolev
+- Ella Bar Yaacov
 
-2. Create basketball hoops (static):
-   - Backboard (white, partially transparent)
-   - Rim (orange) at regulation height
-   - Net using line segments (at least 8 segments)
-   - Support structure (pole and arms) positioned BEHIND the backboard
-   - Place hoops on both ends of the court
+## How to Run Your Implementation
 
-3. Implement a static basketball:
-   - Create a sphere with orange material and black seams
-   - Position at center court
-   - Proper size and spherical geometry
-   - NO physics or movement
+### Prerequisites
 
-4. Camera and lighting infrastructure:
-   - Interactive camera controls (orbit) - toggle with 'O' key
-   - Appropriate lighting with shadows
-   - Proper initial camera positioning
+- Node.js installed on your machine
+- Modern web browser with WebGL support
 
-5. Basic UI framework preparation:
-   - HTML containers for future score display
-   - HTML containers for future controls display  
-   - Basic CSS styling for UI elements
+### Running the Application
 
-## Technical Requirements
-- All objects should cast and receive shadows
-- Use appropriate meshes and materials for each object
-- The scene should be responsive when the browser window is resized
-- Basketball must remain STATIC (no physics or movement)
+1. Clone this repository to your local machine
+2. Navigate to the project directory
+3. Install dependencies: `npm install`
+4. Start the local web server: `node index.js`
+5. Open your browser and go to http://localhost:8000
 
-## IMPORTANT NOTE
-**Physics-based movement, interactive controls (arrow keys, spacebar), shooting mechanics, and scoring systems will be implemented in the next exercise (HW06). Do NOT implement these features in HW05.**
+### Controls
+- **Arrow keys:**
+  - **Left/Right:** Move ball horizontally across court
+  - **Up/Down:** Move ball forward/backward on court
+- **W / S Keys:**
+  - **W**: Increase shot power (stronger shot)
+  - **S**: Decrease shot power (weaker shot)
+- **Spacebar** - Launch ball toward nearest hoop
+- **R key** - Return ball to center court position, Reset ball velocity to zero, Reset shot power to default (50%), Clear any physics state 
 
-## Getting Started
-- The starter code already includes:
-  - Basic THREE.js setup with a scene, camera, and renderer
-  - A simple brown court surface
-  - Lighting setup with shadows enabled
-  - Orbit controls for easy scene navigation (toggle with 'o' key)
-  
-- Examine the `createBasketballCourt()` function and build upon it
-- Use the `degrees_to_radians()` helper function for any rotation calculations
-- Add all your code to the hw5.js file
-
-## Reference
-- Standard basketball court dimensions are ~28m x 15m (92ft x 50ft)
-- Standard basketball rim height is 3.05m (10ft)
-- Use different materials for different parts (MeshBasicMaterial for lines, MeshPhongMaterial for shiny objects)
+controls from ex5: 
+- **O Key**: Toggle orbit camera controls
+- **C Key**: Cycle through camera preset positions
+- **Mouse**: Orbit camera (when enabled)
+- **Scroll**: Zoom camera
