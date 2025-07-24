@@ -74,13 +74,13 @@ let rimHitDetected = false; // Track if rim was hit to prevent multiple detectio
 
 // Physics constants - Adjusted for proper hoop height
 const GRAVITY = -12.0; // Reduced gravity to allow higher shots
-const BOUNCE_DAMPING = 0.6; // Reduced for more bounces
+const BOUNCE_DAMPING = 0.85; // More bouncy ball with higher energy retention
 const FRICTION = 0.99; // Reduced air resistance
 const BALL_RADIUS = 0.25;
 const COURT_BOUNDS = { x: 18, z: 9 };
 const HOOP_POSITIONS = [
-  { x: -15, z: 0, y: 10 },
-  { x: 15, z: 0, y: 10 },
+  { x: -15, z: 0, y: 9.5 },
+  { x: 15, z: 0, y: 9.5 },
 ];
 
 // Court and ball positioning constants
@@ -88,7 +88,7 @@ const COURT_HEIGHT = 0.2;
 const COURT_SURFACE_Y = COURT_HEIGHT / 2; // Top surface of the court
 const BALL_REST_HEIGHT = BALL_RADIUS + COURT_SURFACE_Y; // Ball sits slightly above court surface
 const HOOP_RIM_RADIUS = 0.45;
-const HOOP_HEIGHT = 10;
+const HOOP_HEIGHT = 9.5;
 
 // Game timing constants
 const MESSAGE_DISPLAY_TIME = 120; // 2 seconds at 60fps
@@ -110,7 +110,7 @@ const NET_MIN_VELOCITY = 3.0; // Minimum velocity to prevent complete stopping
 
 // Out of bounds constants
 const OUT_OF_BOUNDS_MESSAGE_TIME = 90; // 1.5 seconds at 60fps
-const COURT_BOUNDARY_BUFFER = 2; // Extra buffer beyond court bounds
+const COURT_BOUNDARY_BUFFER = 0; // No extra buffer - physical boundaries match visual court
 
 // Backboard collision constants
 const BACKBOARD_BOUNCE_DAMPING = 0.8; // How much the backboard slows the ball
@@ -363,7 +363,7 @@ function createBasketballHoop(x, z, facingDirection) {
   rimGeometry.rotateX(Math.PI / 2);
   const rimMaterial = new THREE.MeshPhongMaterial({ color: 0xff8c00 });
   const rim = new THREE.Mesh(rimGeometry, rimMaterial);
-  rim.position.set(x, 10, z);
+  rim.position.set(x, 9.5, z);
   rim.castShadow = true;
   rim.receiveShadow = true;
   hoopGroup.add(rim);
@@ -402,7 +402,7 @@ function createBasketballHoop(x, z, facingDirection) {
   });
 
   const backboard = new THREE.Mesh(backboardGeometry, backboardMaterial);
-  backboard.position.set(x + facingDirection * 0.6, 10.5, z);
+  backboard.position.set(x + facingDirection * 0.6, 10.1, z);
   backboard.castShadow = true;
   backboard.receiveShadow = true;
   hoopGroup.add(backboard);
@@ -420,7 +420,7 @@ function createBasketballHoop(x, z, facingDirection) {
   const armGeometry = new THREE.BoxGeometry(0.8, 0.1, 0.1);
   const armMaterial = new THREE.MeshPhongMaterial({ color: 0x666666 });
   const arm = new THREE.Mesh(armGeometry, armMaterial);
-  arm.position.set(x + facingDirection * 1.1, 10.5, z);
+  arm.position.set(x + facingDirection * 1.1, 10.1, z);
   arm.castShadow = true;
   arm.receiveShadow = true;
   hoopGroup.add(arm);
@@ -436,12 +436,12 @@ function createBasketballHoop(x, z, facingDirection) {
     const chainLineGeometry = new THREE.BufferGeometry().setFromPoints([
       new THREE.Vector3(
         x + Math.cos(angle) * rimRadius,
-        10,
+        9.5,
         z + Math.sin(angle) * rimRadius
       ),
       new THREE.Vector3(
         x + Math.cos(angle) * rimRadius * 0.7,
-        8,
+        7.5,
         z + Math.sin(angle) * rimRadius * 0.7
       ),
     ]);
@@ -453,7 +453,7 @@ function createBasketballHoop(x, z, facingDirection) {
   // Horizontal chain rings
   for (let ring = 1; ring <= 4; ring++) {
     const ringRadius = rimRadius * (1 - ring * 0.12);
-    const ringHeight = 10 - ring * 0.5;
+    const ringHeight = 9.5 - ring * 0.5;
     const ringPoints = [];
 
     for (let i = 0; i <= 20; i++) {
@@ -479,9 +479,9 @@ function createBasketballHoop(x, z, facingDirection) {
     rim: rim,
     backboard: backboard,
     netLines: netLines, // Store net line objects for movement
-    position: { x: x, y: 10, z: z },
-    originalPosition: { x: x, y: 10, z: z },
-    rimOriginalPosition: { x: x, y: 10, z: z }, // Store rim's original position separately
+    position: { x: x, y: 9.5, z: z },
+    originalPosition: { x: x, y: 9.5, z: z },
+    rimOriginalPosition: { x: x, y: 9.5, z: z }, // Store rim's original position separately
     movementTimer: 0,
     isMoving: false,
     netMovementTimer: 0,
@@ -582,7 +582,7 @@ function createStadiumEnvironment() {
     ctx.fillText(`ACCURACY: ${accuracy}%`, canvas.width / 2, 300);
 
     // Add current power
-    ctx.fillText(`POWER: ${shotPower}%`, canvas.width / 2, 330);
+    ctx.fillText(`POWER: ${shotPower}`, canvas.width / 2, 330);
   }
 
   // Create initial texture
@@ -786,18 +786,25 @@ function updatePhysics(deltaTime) {
   if (basketball.position.y <= BALL_REST_HEIGHT) {
     basketball.position.y = BALL_REST_HEIGHT;
 
-    // Bounce with energy loss
+    // Improved bounce physics with more realistic behavior
+    const impactSpeed = Math.abs(basketballVelocity.y);
+
+    // Bounce with energy loss - more realistic for basketball
     basketballVelocity.y = -basketballVelocity.y * BOUNCE_DAMPING;
 
-    // Add some horizontal friction on ground contact
-    basketballVelocity.x *= 0.95;
-    basketballVelocity.z *= 0.95;
+    // Add realistic horizontal friction - less friction for faster bounces
+    const frictionFactor = Math.max(0.85, 1.0 - impactSpeed * 0.02);
+    basketballVelocity.x *= frictionFactor;
+    basketballVelocity.z *= frictionFactor;
+
+    // Add slight randomness to make bounces more realistic
+    basketballVelocity.x += (Math.random() - 0.5) * impactSpeed * 0.1;
+    basketballVelocity.z += (Math.random() - 0.5) * impactSpeed * 0.1;
 
     // Bounce rotation effect - ball maintains some rotation but with energy loss
     // This simulates how a real basketball bounces and continues rotating
     if (basketballVelocity.length() > 1.0) {
       // Calculate bounce rotation based on impact velocity
-      const impactSpeed = Math.abs(basketballVelocity.y);
       const bounceRotationSpeed = impactSpeed * 0.3; // 30% of impact speed
 
       // Determine rotation axis based on horizontal movement
@@ -853,7 +860,7 @@ function updatePhysics(deltaTime) {
   checkBackboardCollision();
 
   // Check for rim collisions
-  checkRimCollision();
+  checkACollision();
 
   // Check for successful shots
   checkForScore();
@@ -901,7 +908,7 @@ function checkBackboardCollision() {
     // Calculate backboard position based on hoop position and facing direction
     const facingDirection = hoop.x > 0 ? 1 : -1; // Left hoop faces left, right hoop faces right
     const backboardX = hoop.x + facingDirection * 0.6;
-    const backboardY = 10.5;
+    const backboardY = 10.1;
     const backboardZ = hoop.z;
 
     // Backboard dimensions (from createBasketballHoop function)
@@ -955,7 +962,7 @@ function checkBackboardCollision() {
   }
 }
 
-function checkRimCollision() {
+function checkACollision() {
   if (!basketball || !isBallInFlight || rimHitDetected) return;
 
   for (const hoopData of hoopObjects) {
@@ -1328,8 +1335,15 @@ function moveBall(direction, speed) {
     }
   }
 
-  // Allow ball to go outside court bounds for more realistic gameplay
-  // No boundary restrictions on movement
+  // Keep ball within court boundaries
+  basketball.position.x = Math.max(
+    -COURT_BOUNDS.x,
+    Math.min(COURT_BOUNDS.x, basketball.position.x)
+  );
+  basketball.position.z = Math.max(
+    -COURT_BOUNDS.z,
+    Math.min(COURT_BOUNDS.z, basketball.position.z)
+  );
 }
 
 function adjustShotPower(delta) {
@@ -1353,7 +1367,7 @@ function updateScoreDisplay() {
       shotAttempts > 0 ? ((shotsMade / shotAttempts) * 100).toFixed(1) : "0.0";
     accuracyElement.textContent = accuracy + "%";
   }
-  if (powerElement) powerElement.textContent = shotPower + "%";
+  if (powerElement) powerElement.textContent = shotPower;
   if (powerFillElement) powerFillElement.style.width = shotPower + "%";
 
   // Update 3D scoreboard
@@ -1384,7 +1398,7 @@ const cameraPresets = [
   { name: "Default", position: [0, 20, 25], lookAt: [0, 0, 0] },
   { name: "Side View", position: [25, 15, 0], lookAt: [0, 0, 0] },
   { name: "Top View", position: [0, 35, 0], lookAt: [0, 0, 0] },
-  { name: "Hoop View", position: [15, 12, 0], lookAt: [15, 10, 0] },
+  { name: "Hoop View", position: [15, 12, 0], lookAt: [15, 9.5, 0] },
   { name: "Court Level", position: [0, 2, 15], lookAt: [0, 0, 0] },
   { name: "Behind Hoop", position: [0, 8, 12], lookAt: [0, 0, 0] },
 ];
