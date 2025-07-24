@@ -64,6 +64,11 @@ let hasScoredThisShot = false; // Track if current shot has already scored
 let scoreboardDisplay; // Reference to the 3D scoreboard display
 let ballPassedThroughNet = false; // Track if ball has passed through the net
 let netPassageTime = 0; // Track time since passing through net
+let ballOutOfBounds = false; // Track if ball has gone out of bounds
+let outOfBoundsTimer = 0; // Timer for out of bounds message
+let shotPassedHoop = false; // Track if ball has passed through hoop area
+let missedShotDetected = false; // Track if a missed shot has been detected
+let scoreboardPulseTimer = 0; // Timer for scoreboard pulse animation
 
 // Physics constants - Adjusted for proper hoop height
 const GRAVITY = -12.0; // Reduced gravity to allow higher shots
@@ -99,6 +104,14 @@ const SHOT_UPWARD_COMPONENT = 8; // Increased for better arc
 const NET_HEIGHT = 1.5; // Height of the net below the rim
 const NET_SLOWDOWN_FACTOR = 0.3; // How much the net slows the ball
 const NET_PASSAGE_TIME = 0.5; // Time in seconds for ball to pass through net
+
+// Out of bounds constants
+const OUT_OF_BOUNDS_MESSAGE_TIME = 90; // 1.5 seconds at 60fps
+const COURT_BOUNDARY_BUFFER = 2; // Extra buffer beyond court bounds
+
+// Backboard collision constants
+const BACKBOARD_BOUNCE_DAMPING = 0.8; // How much the backboard slows the ball
+const BACKBOARD_FRICTION = 0.9; // Friction when ball hits backboard
 
 // Input state
 const keys = {
@@ -509,36 +522,56 @@ function createStadiumEnvironment() {
     ctx.fillStyle = "#000000";
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-    // Add green border
-    ctx.strokeStyle = "#00ff00";
+    // Add red border
+    ctx.strokeStyle = "#ff0000";
     ctx.lineWidth = 8;
     ctx.strokeRect(4, 4, canvas.width - 8, canvas.height - 8);
 
-    // Add score text
-    ctx.fillStyle = "#00ff00";
-    ctx.font = "bold 80px Arial";
+    // Add title
+    ctx.fillStyle = "#ff0000";
+    ctx.font = "bold 60px Arial";
     ctx.textAlign = "center";
-    ctx.fillText("SCORE", canvas.width / 2, 80);
-    ctx.fillText(score.toString(), canvas.width / 2, 160);
+    ctx.fillText("BASKETBALL", canvas.width / 2, 60);
+
+    // Add score text
+    ctx.font = "bold 80px Arial";
+    ctx.fillText("SCORE", canvas.width / 2, 120);
+    ctx.fillText(score.toString(), canvas.width / 2, 200);
 
     // Add additional stats
-    ctx.font = "bold 40px Arial";
-    ctx.fillText(`BASKETS: ${shotsMade}`, canvas.width / 2, 200);
-    ctx.fillText(`ATTEMPTS: ${shotAttempts}`, canvas.width / 2, 230);
+    ctx.font = "bold 35px Arial";
+    ctx.fillText(`BASKETS: ${shotsMade}`, canvas.width / 2, 240);
+    ctx.fillText(`ATTEMPTS: ${shotAttempts}`, canvas.width / 2, 270);
+
+    // Add accuracy percentage
+    const accuracy =
+      shotAttempts > 0 ? ((shotsMade / shotAttempts) * 100).toFixed(1) : "0.0";
+    ctx.fillText(`ACCURACY: ${accuracy}%`, canvas.width / 2, 300);
+
+    // Add current power
+    ctx.fillText(`POWER: ${shotPower}%`, canvas.width / 2, 330);
   }
 
   // Create initial texture
   updateScoreboardTexture();
 
   const displayTexture = new THREE.CanvasTexture(canvas);
-  const displayMaterial = new THREE.MeshPhongMaterial({
+  displayTexture.wrapS = THREE.ClampToEdgeWrapping;
+  displayTexture.wrapT = THREE.ClampToEdgeWrapping;
+
+  const displayMaterial = new THREE.MeshStandardMaterial({
     map: displayTexture,
-    emissive: 0x00ff00,
-    emissiveIntensity: 0.1,
+    emissive: 0xff0000,
+    emissiveIntensity: 0.3,
+    transparent: true,
+    opacity: 0.95,
   });
 
+  // Create improved scoreboard display
   scoreboardDisplay = new THREE.Mesh(displayGeometry, displayMaterial);
-  scoreboardDisplay.position.set(0, 12, -17.8);
+  scoreboardDisplay.position.set(0, 12, -17.7); // Moved higher and further back
+  scoreboardDisplay.castShadow = true;
+  scoreboardDisplay.receiveShadow = true;
   scoreboardDisplay.userData = {
     updateTexture: updateScoreboardTexture,
     texture: displayTexture,
@@ -553,6 +586,16 @@ function createStadiumEnvironment() {
   support.castShadow = true;
   support.receiveShadow = true;
   scene.add(support);
+
+  // Add spotlight to highlight the scoreboard
+  // const scoreboardLight = new THREE.SpotLight(0xff0000, 0.8);
+  // scoreboardLight.position.set(100, 100, -15);
+  // scoreboardLight.angle = Math.PI / 8;
+  // scoreboardLight.penumbra = 0.3;
+  // scoreboardLight.target = scoreboardDisplay;
+  // scoreboardLight.castShadow = true;
+  // scene.add(scoreboardLight);
+  // scene.add(scoreboardLight.target);
 }
 
 // Physics and game logic functions
@@ -570,32 +613,33 @@ function updatePhysics(deltaTime) {
   // Apply net physics if ball has scored and is passing through net
   if (ballPassedThroughNet) {
     netPassageTime += deltaTime;
-    
+
     // Check if ball is in the net area (below rim, above net bottom)
     for (const hoop of HOOP_POSITIONS) {
       const horizontalDistance = Math.sqrt(
         Math.pow(basketball.position.x - hoop.x, 2) +
           Math.pow(basketball.position.z - hoop.z, 2)
       );
-      
+
       // If ball is within net area and still passing through
-      if (horizontalDistance < HOOP_RIM_RADIUS && 
-          basketball.position.y < hoop.y && 
-          basketball.position.y > hoop.y - NET_HEIGHT &&
-          netPassageTime < NET_PASSAGE_TIME) {
-        
+      if (
+        horizontalDistance < HOOP_RIM_RADIUS &&
+        basketball.position.y < hoop.y &&
+        basketball.position.y > hoop.y - NET_HEIGHT &&
+        netPassageTime < NET_PASSAGE_TIME
+      ) {
         // Apply net resistance - slow down the ball significantly
         basketballVelocity.multiplyScalar(NET_SLOWDOWN_FACTOR);
-        
+
         // Add some horizontal resistance from the net
         basketballVelocity.x *= 0.8;
         basketballVelocity.z *= 0.8;
-        
+
         console.log("Ball passing through net - slowed down");
         break;
       }
     }
-    
+
     // Reset net passage after the ball has passed through
     if (netPassageTime >= NET_PASSAGE_TIME) {
       ballPassedThroughNet = false;
@@ -611,7 +655,8 @@ function updatePhysics(deltaTime) {
   const velocityMagnitude = basketballVelocity.length();
   const rotationSpeed = velocityMagnitude * 2.5; // Adjusted for better visual effect
 
-  if (rotationSpeed > 0.05) { // Lower threshold for more responsive rotation
+  if (rotationSpeed > 0.05) {
+    // Lower threshold for more responsive rotation
     // Calculate rotation axis perpendicular to velocity direction
     const velocityNormalized = basketballVelocity.clone().normalize();
 
@@ -636,10 +681,10 @@ function updatePhysics(deltaTime) {
   // Ground collision with improved bounce physics
   if (basketball.position.y <= BALL_REST_HEIGHT) {
     basketball.position.y = BALL_REST_HEIGHT;
-    
+
     // Bounce with energy loss
     basketballVelocity.y = -basketballVelocity.y * BOUNCE_DAMPING;
-    
+
     // Add some horizontal friction on ground contact
     basketballVelocity.x *= 0.95;
     basketballVelocity.z *= 0.95;
@@ -654,11 +699,121 @@ function updatePhysics(deltaTime) {
       basketballAngularVelocity.set(0, 0, 0);
       ballPassedThroughNet = false; // Reset net state when ball stops
       netPassageTime = 0;
+
+      // Check if this was a missed shot (ball stopped without scoring)
+      if (!hasScoredThisShot && !ballOutOfBounds && !missedShotDetected) {
+        missedShotDetected = true;
+        gameMessage = "SHOT MISSED!";
+        messageTimer = OUT_OF_BOUNDS_MESSAGE_TIME;
+        console.log("Shot missed - ball stopped without scoring");
+      }
     }
   }
 
+  // Check for out of bounds
+  checkOutOfBounds();
+
+  // Check for backboard collisions
+  checkBackboardCollision();
+
   // Check for successful shots
   checkForScore();
+}
+
+function checkOutOfBounds() {
+  if (!basketball || !isBallInFlight || hasScoredThisShot || ballOutOfBounds)
+    return;
+
+  // Check if ball has gone beyond court boundaries
+  const extendedBounds = {
+    x: COURT_BOUNDS.x + COURT_BOUNDARY_BUFFER,
+    z: COURT_BOUNDS.z + COURT_BOUNDARY_BUFFER,
+  };
+
+  if (
+    Math.abs(basketball.position.x) > extendedBounds.x ||
+    Math.abs(basketball.position.z) > extendedBounds.z ||
+    basketball.position.y > 20 // Ball went too high
+  ) {
+    // Ball is out of bounds - stop it and show message
+    ballOutOfBounds = true;
+    isBallInFlight = false;
+    basketballVelocity.set(0, 0, 0);
+    basketballAngularVelocity.set(0, 0, 0);
+
+    // Show missed shot message
+    gameMessage = "SHOT MISSED! Ball out of bounds";
+    messageTimer = OUT_OF_BOUNDS_MESSAGE_TIME;
+    outOfBoundsTimer = OUT_OF_BOUNDS_MESSAGE_TIME;
+
+    console.log("Ball out of bounds at position:", basketball.position);
+
+    // Return ball to center after a short delay
+    setTimeout(() => {
+      resetBall();
+    }, 1500); // 1.5 second delay
+  }
+}
+
+function checkBackboardCollision() {
+  if (!basketball || !isBallInFlight) return;
+
+  for (const hoop of HOOP_POSITIONS) {
+    // Calculate backboard position based on hoop position and facing direction
+    const facingDirection = hoop.x > 0 ? 1 : -1; // Left hoop faces left, right hoop faces right
+    const backboardX = hoop.x + facingDirection * 0.6;
+    const backboardY = 10.5;
+    const backboardZ = hoop.z;
+
+    // Backboard dimensions (from createBasketballHoop function)
+    const backboardWidth = 0.1; // X dimension
+    const backboardHeight = 1.2; // Y dimension
+    const backboardDepth = 2.1; // Z dimension
+
+    // Check if ball is colliding with backboard
+    const ballX = basketball.position.x;
+    const ballY = basketball.position.y;
+    const ballZ = basketball.position.z;
+
+    // Check if ball is within backboard bounds
+    if (
+      Math.abs(ballX - backboardX) < backboardWidth / 2 + BALL_RADIUS &&
+      Math.abs(ballY - backboardY) < backboardHeight / 2 + BALL_RADIUS &&
+      Math.abs(ballZ - backboardZ) < backboardDepth / 2 + BALL_RADIUS
+    ) {
+      // Ball is colliding with backboard
+      console.log("Backboard collision detected!");
+
+      // Determine which side of the backboard was hit
+      const hitFromFront =
+        (facingDirection > 0 && ballX < backboardX) ||
+        (facingDirection < 0 && ballX > backboardX);
+
+      if (hitFromFront) {
+        // Ball hit the front of backboard - bounce it back
+        basketballVelocity.x = -basketballVelocity.x * BACKBOARD_BOUNCE_DAMPING;
+        basketballVelocity.y *= BACKBOARD_FRICTION;
+        basketballVelocity.z *= BACKBOARD_FRICTION;
+
+        // Add some randomness to make it more realistic
+        basketballVelocity.y += (Math.random() - 0.5) * 2;
+        basketballVelocity.z += (Math.random() - 0.5) * 2;
+
+        // Move ball slightly away from backboard to prevent sticking
+        const pushDirection = facingDirection > 0 ? -1 : 1;
+        basketball.position.x =
+          backboardX + pushDirection * (backboardWidth / 2 + BALL_RADIUS + 0.1);
+
+        // Show backboard hit message
+        gameMessage = "BACKBOARD!";
+        messageTimer = 30; // 0.5 seconds
+      } else {
+        // Ball hit the back of backboard - let it pass through (for bank shots)
+        // This allows for realistic bank shot physics
+        console.log("Bank shot - ball passing through backboard");
+      }
+    }
+  }
 }
 
 function checkForScore() {
@@ -696,6 +851,7 @@ function checkForScore() {
         hasScoredThisShot = true; // Mark this shot as scored
         ballPassedThroughNet = true; // Ball will now pass through net
         netPassageTime = 0; // Reset net passage timer
+        shotPassedHoop = true; // Mark that ball passed through hoop area
         gameMessage = "SHOT MADE! +2 points";
         messageTimer = MESSAGE_DISPLAY_TIME;
         updateScoreDisplay();
@@ -714,6 +870,15 @@ function checkForScore() {
           "Rim opening radius:",
           rimOpeningRadius
         );
+
+        // Mark that ball passed through hoop area but missed
+        if (!shotPassedHoop) {
+          shotPassedHoop = true;
+          missedShotDetected = true;
+          gameMessage = "SHOT MISSED!";
+          messageTimer = OUT_OF_BOUNDS_MESSAGE_TIME;
+          console.log("Shot missed - ball hit rim but didn't go through");
+        }
       } else {
         // Ball near hoop but missed completely
         console.log(
@@ -724,6 +889,15 @@ function checkForScore() {
           "Distance:",
           horizontalDistance
         );
+
+        // Mark that ball passed through hoop area but missed
+        if (!shotPassedHoop) {
+          shotPassedHoop = true;
+          missedShotDetected = true;
+          gameMessage = "SHOT MISSED!";
+          messageTimer = OUT_OF_BOUNDS_MESSAGE_TIME;
+          console.log("Shot missed - ball missed hoop completely");
+        }
       }
     }
   }
@@ -735,6 +909,10 @@ function shootBall() {
   shotAttempts++;
   isBallInFlight = true;
   hasScoredThisShot = false; // Reset score flag for new shot
+  ballOutOfBounds = false; // Reset out of bounds state for new shot
+  outOfBoundsTimer = 0;
+  shotPassedHoop = false; // Reset shot passed hoop state for new shot
+  missedShotDetected = false; // Reset missed shot detection for new shot
 
   // Find nearest hoop
   const ballPos = basketball.position;
@@ -775,19 +953,24 @@ function shootBall() {
   const minHeightForHoop = nearestHoop.y + 0.5; // Aim above the rim
   const currentHeight = ballPos.y;
   const heightDifference = minHeightForHoop - currentHeight;
-  
+
   // Calculate minimum vertical velocity needed to reach hoop height
   // Using physics equation: v^2 = v0^2 + 2*a*y
   // At peak height, v = 0, so: 0 = v0^2 + 2*(-gravity)*height
   // Therefore: v0 = sqrt(2*gravity*height)
-  const minVerticalVelocity = Math.sqrt(2 * Math.abs(GRAVITY) * heightDifference);
-  
+  const minVerticalVelocity = Math.sqrt(
+    2 * Math.abs(GRAVITY) * heightDifference
+  );
+
   // Use a higher angle for better arc and control
   const shotAngle = Math.PI / 3; // 60 degrees for higher arc
-  
+
   // Calculate velocity components
   const horizontalVelocity = baseVelocity * Math.cos(shotAngle);
-  const verticalVelocity = Math.max(baseVelocity * Math.sin(shotAngle), minVerticalVelocity);
+  const verticalVelocity = Math.max(
+    baseVelocity * Math.sin(shotAngle),
+    minVerticalVelocity
+  );
 
   // Apply horizontal velocity in direction of hoop
   const horizontalVelocityX = directionToHoop.x * horizontalVelocity;
@@ -830,11 +1013,46 @@ function resetBall() {
     hasScoredThisShot = false; // Reset score flag
     ballPassedThroughNet = false; // Reset net state
     netPassageTime = 0;
+    ballOutOfBounds = false; // Reset out of bounds state
+    outOfBoundsTimer = 0;
+    shotPassedHoop = false; // Reset shot passed hoop state
+    missedShotDetected = false; // Reset missed shot detection
     shotPower = 50;
     gameMessage = "Ball reset to center";
     messageTimer = RESET_MESSAGE_TIME;
     updateScoreDisplay();
   }
+}
+
+function resetGame() {
+  // Reset all game statistics
+  score = 0;
+  shotAttempts = 0;
+  shotsMade = 0;
+  gameMessage = "Game Reset!";
+  messageTimer = RESET_MESSAGE_TIME;
+
+  // Reset ball position
+  if (basketball) {
+    basketball.position.set(0, BALL_REST_HEIGHT, 0);
+    basketballVelocity.set(0, 0, 0);
+    basketballAngularVelocity.set(0, 0, 0);
+    basketball.rotation.set(0, 0, 0);
+  }
+
+  // Reset all game states
+  isBallInFlight = false;
+  hasScoredThisShot = false;
+  ballPassedThroughNet = false;
+  netPassageTime = 0;
+  ballOutOfBounds = false;
+  outOfBoundsTimer = 0;
+  shotPassedHoop = false;
+  missedShotDetected = false;
+  shotPower = 50;
+
+  // Update display
+  updateScoreDisplay();
 }
 
 function moveBall(direction, speed) {
@@ -887,6 +1105,9 @@ function updateScoreDisplay() {
   if (scoreboardDisplay && scoreboardDisplay.userData.updateTexture) {
     scoreboardDisplay.userData.updateTexture();
     scoreboardDisplay.userData.texture.needsUpdate = true;
+
+    // Trigger pulse animation when score changes
+    scoreboardPulseTimer = 30; // 0.5 seconds at 60fps
   }
 }
 
@@ -952,6 +1173,7 @@ function updateUI() {
     <div><span style="background-color: #444; padding: 2px 6px; border-radius: 3px; font-family: monospace;">W/S</span> - Adjust shot power</div>
     <div><span style="background-color: #444; padding: 2px 6px; border-radius: 3px; font-family: monospace;">Spacebar</span> - Shoot basketball</div>
     <div><span style="background-color: #444; padding: 2px 6px; border-radius: 3px; font-family: monospace;">R</span> - Reset ball to center</div>
+    <div><span style="background-color: #444; padding: 2px 6px; border-radius: 3px; font-family: monospace;">G</span> - Reset game (all scores to 0)</div>
     <br>
     <h4>Camera Controls:</h4>
     <div><span style="background-color: #444; padding: 2px 6px; border-radius: 3px; font-family: monospace;">O</span> - Toggle orbit camera</div>
@@ -973,6 +1195,8 @@ function handleKeyDown(e) {
     shootBall();
   } else if (e.code === "KeyR" && !e.repeat) {
     resetBall();
+  } else if (e.code === "KeyG" && !e.repeat) {
+    resetGame();
   } else if (e.code === "KeyO" && !e.repeat) {
     isOrbitEnabled = !isOrbitEnabled;
     controls.enabled = isOrbitEnabled;
@@ -1033,6 +1257,15 @@ function animate(currentTime) {
   // Update game message
   updateGameMessage();
 
+  // Update scoreboard pulse animation
+  if (scoreboardPulseTimer > 0) {
+    scoreboardPulseTimer--;
+    const pulseIntensity = 0.2 + 0.1 * Math.sin(scoreboardPulseTimer * 0.3);
+    if (scoreboardDisplay && scoreboardDisplay.material) {
+      scoreboardDisplay.material.emissiveIntensity = pulseIntensity;
+    }
+  }
+
   // Update controls
   if (isOrbitEnabled) {
     controls.update();
@@ -1044,7 +1277,13 @@ function animate(currentTime) {
   renderer.render(scene, camera);
 }
 
-// Initialize score display
+// Initialize score display and ensure scoreboard starts with zeros
 updateScoreDisplay();
+
+// Force initial scoreboard update to ensure zeros are displayed
+if (scoreboardDisplay && scoreboardDisplay.userData.updateTexture) {
+  scoreboardDisplay.userData.updateTexture();
+  scoreboardDisplay.userData.texture.needsUpdate = true;
+}
 
 animate();
